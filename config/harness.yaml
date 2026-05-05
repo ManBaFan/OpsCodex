@@ -1,0 +1,46 @@
+codex:
+  command: codex
+  timeout_seconds: 900
+  sandbox: workspace-write
+  extra_args:
+    - -c
+    - approval_policy="never"
+
+tools:
+  default_timeout_seconds: 20
+
+  vm:
+    base_url: ${VM_BASE_URL}
+    timeout_seconds: 15
+    default_step_seconds: 60
+
+  es:
+    base_url: ${ES_URL}
+    username_env: ES_USERNAME
+    password_env: ES_PASSWORD
+    api_key_env: ES_API_KEY
+    timeout_seconds: 20
+    max_size: 50
+    verify_tls: true
+
+  k8s:
+    kubectl: kubectl
+    timeout_seconds: 30
+    default_context:
+    allowed_contexts: []
+
+  aws:
+    aws: aws
+    region: ${AWS_REGION}
+    timeout_seconds: 30
+    period_seconds: 60
+
+  ssh_ro:
+    ssh: ssh
+    timeout_seconds: 20
+    connect_timeout_seconds: 5
+    allowed_hosts: []
+    log_roots:
+      - /var/log
+      - /usr/local/openresty/nginx/logs
+      - /data/logs

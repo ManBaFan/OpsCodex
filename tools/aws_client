@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _common import command_result, default_timeout, emit, fail, parse_json_output, require_name, tool_config, utc_window
+
+
+def with_region(config: dict) -> list[str]:
+    region = str(config.get("region") or "")
+    return ["--region", region] if region else []
+
+
+def run_aws(config: dict, args: list[str]) -> dict:
+    aws = str(config.get("aws") or "aws")
+    timeout = default_timeout(config, 30)
+    return command_result([aws, *args, *with_region(config)], timeout=timeout)
+
+
+def metric_statistics(
+    config: dict,
+    namespace: str,
+    metric: str,
+    dimensions: list[str],
+    start_time: str,
+    end_time: str,
+    statistics: list[str],
+) -> dict:
+    period = str(int(config.get("period_seconds", 60)))
+    args = [
+        "cloudwatch",
+        "get-metric-statistics",
+        "--namespace",
+        namespace,
+        "--metric-name",
+        metric,
+        "--dimensions",
+        *dimensions,
+        "--start-time",
+        start_time,
+        "--end-time",
+        end_time,
+        "--period",
+        period,
+        "--statistics",
+        *statistics,
+        "--output",
+        "json",
+    ]
+    result = run_aws(config, args)
+    parsed = parse_json_output(result)
+    result["json"] = parsed
+    return result
+
+
+def arn_suffix(arn: str, marker: str) -> str:
+    if marker not in arn:
+        return arn
+    return arn.split(marker, 1)[1]
+
+
+def resolve_target_group(config: dict, target_group: str) -> dict:
+    if target_group.startswith("targetgroup/"):
+        return {"ok": True, "target_group_full_name": target_group, "load_balancer_full_name": None}
+    if ":targetgroup/" in target_group:
+        return {"ok": True, "target_group_full_name": arn_suffix(target_group, ":targetgroup/"), "load_balancer_full_name": None}
+
+    result = run_aws(
+        config,
+        [
+            "elbv2",
+            "describe-target-groups",
+            "--names",
+            require_name(target_group, "target-group"),
+            "--output",
+            "json",
+        ],
+    )
+    parsed = parse_json_output(result)
+    if not result.get("ok") or not parsed.get("parse_ok"):
+        return {"ok": False, "result": result}
+    groups = parsed["data"].get("TargetGroups", [])
+    if not groups:
+        return {"ok": False, "error": "target group not found", "target_group": target_group}
+    group = groups[0]
+    tg_full = arn_suffix(group.get("TargetGroupArn", ""), ":targetgroup/")
+    lb_arns = group.get("LoadBalancerArns", [])
+    lb_full = arn_suffix(lb_arns[0], ":loadbalancer/") if lb_arns else None
+    return {"ok": True, "target_group_full_name": tg_full, "load_balancer_full_name": lb_full, "describe": parsed["data"]}
+
+
+def ena_check(config: dict, instance_id: str, window: str) -> None:
+    start_time, end_time, _ = utc_window(window)
+    dimensions = [f"Name=InstanceId,Value={require_name(instance_id, 'instance-id')}"]
+    metrics = ["NetworkIn", "NetworkOut", "NetworkPacketsIn", "NetworkPacketsOut"]
+    results = {
+        metric: metric_statistics(
+            config,
+            "AWS/EC2",
+            metric,
+            dimensions,
+            start_time,
+            end_time,
+            ["Average", "Maximum", "Sum"],
+        )
+        for metric in metrics
+    }
+    describe = run_aws(
+        config,
+        [
+            "ec2",
+            "describe-instances",
+            "--instance-ids",
+            instance_id,
+            "--output",
+            "json",
+        ],
+    )
+    describe["json"] = parse_json_output(describe)
+    emit(
+        {
+            "ok": all(item.get("ok") for item in results.values()) and describe.get("ok", False),
+            "source": "aws",
+            "check": "ena-check",
+            "window": {"start": start_time, "end": end_time},
+            "note": "ENA allowance exceeded counters are usually collected from node exporter or ethtool; this AWS check returns EC2 network CloudWatch metrics and instance metadata only.",
+            "instance": describe,
+            "metrics": results,
+        },
+        0 if all(item.get("ok") for item in results.values()) and describe.get("ok", False) else 1,
+    )
+
+
+def nlb_check(config: dict, target_group: str, window: str, load_balancer: str | None) -> None:
+    start_time, end_time, _ = utc_window(window)
+    resolved = resolve_target_group(config, target_group)
+    if not resolved.get("ok"):
+        emit({"ok": False, "source": "aws", "check": "nlb-check", "target_group": target_group, "resolve": resolved}, 1)
+    target_group_full = resolved["target_group_full_name"]
+    load_balancer_full = load_balancer or resolved.get("load_balancer_full_name")
+    if not load_balancer_full:
+        fail("load balancer full name is required when target group ARN/name cannot resolve it")
+
+    dimensions = [
+        f"Name=TargetGroup,Value={target_group_full}",
+        f"Name=LoadBalancer,Value={load_balancer_full}",
+    ]
+    metric_specs = {
+        "TargetConnectionErrorCount": ["Sum"],
+        "TCP_Target_Reset_Count": ["Sum"],
+        "TargetResponseTime": ["Average", "Maximum"],
+    }
+    results = {
+        metric: metric_statistics(config, "AWS/NetworkELB", metric, dimensions, start_time, end_time, stats)
+        for metric, stats in metric_specs.items()
+    }
+    ok = all(item.get("ok") for item in results.values())
+    emit(
+        {
+            "ok": ok,
+            "source": "aws",
+            "check": "nlb-check",
+            "window": {"start": start_time, "end": end_time},
+            "target_group_full_name": target_group_full,
+            "load_balancer_full_name": load_balancer_full,
+            "metrics": results,
+        },
+        0 if ok else 1,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Read-only AWS diagnostics client")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    ena = subparsers.add_parser("ena-check")
+    ena.add_argument("--instance-id", required=True)
+    ena.add_argument("--range", required=True)
+
+    nlb = subparsers.add_parser("nlb-check")
+    nlb.add_argument("--target-group", required=True)
+    nlb.add_argument("--load-balancer")
+    nlb.add_argument("--range", required=True)
+
+    args = parser.parse_args()
+    config = tool_config("aws")
+    if args.command == "ena-check":
+        ena_check(config, args.instance_id, args.range)
+    elif args.command == "nlb-check":
+        nlb_check(config, args.target_group, args.range, args.load_balancer)
+
+
+if __name__ == "__main__":
+    main()

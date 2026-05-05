@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import pathlib
+import sys
+import time
+
+import requests
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _common import default_timeout, emit, fail, parse_duration_seconds, tool_config
+
+
+def request_json(base_url: str, path: str, params: dict[str, str | int], timeout: int) -> None:
+    url = base_url.rstrip("/") + path
+    try:
+        response = requests.get(url, params=params, timeout=timeout)
+    except requests.RequestException as exc:
+        fail("victoriametrics request failed", exception=str(exc), url=url, params=params)
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = response.text[:4000]
+
+    emit(
+        {
+            "ok": response.ok,
+            "source": "victoriametrics",
+            "status_code": response.status_code,
+            "request": {"method": "GET", "url": url, "params": params},
+            "response": body,
+        },
+        0 if response.ok else 1,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Read-only VictoriaMetrics/Prometheus client")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    instant = subparsers.add_parser("query", help="Run an instant PromQL query")
+    instant.add_argument("promql")
+
+    range_query = subparsers.add_parser("range", help="Run a range PromQL query")
+    range_query.add_argument("promql")
+    range_query.add_argument("range")
+    range_query.add_argument("--step", type=int)
+
+    args = parser.parse_args()
+    config = tool_config("vm")
+    base_url = str(config.get("base_url") or "")
+    if not base_url:
+        fail("vm base_url is not configured; set tools.vm.base_url or VM_BASE_URL")
+    timeout = default_timeout(config, 15)
+
+    if args.command == "query":
+        request_json(base_url, "/api/v1/query", {"query": args.promql}, timeout)
+
+    end = int(time.time())
+    start = end - parse_duration_seconds(args.range)
+    step = args.step or int(config.get("default_step_seconds", 60))
+    if step <= 0 or step > 3600:
+        fail("step must be between 1 and 3600 seconds", step=step)
+    request_json(
+        base_url,
+        "/api/v1/query_range",
+        {"query": args.promql, "start": start, "end": end, "step": step},
+        timeout,
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import pathlib
+import shlex
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _common import command_result, default_timeout, emit, fail, require_name, tool_config
+
+
+BLOCKED_TOKENS = {
+    "rm",
+    "kill",
+    "reboot",
+    "shutdown",
+    "vim",
+    "nano",
+    "tee",
+    "chmod",
+    "chown",
+}
+BLOCKED_SUBSTRINGS = [";", "&&", "||", "|", "`", "$(", ">", "<", "\n"]
+SIMPLE_ALLOW = {"ss", "netstat", "free", "df", "uptime", "ps", "dmesg"}
+
+
+def is_under(path: str, roots: list[str]) -> bool:
+    try:
+        candidate = pathlib.PurePosixPath(path)
+    except ValueError:
+        return False
+    if not candidate.is_absolute():
+        return False
+    normalized = str(candidate)
+    return any(normalized == root.rstrip("/") or normalized.startswith(root.rstrip("/") + "/") for root in roots)
+
+
+def validate_log_paths(tokens: list[str], roots: list[str], start: int = 1) -> None:
+    paths = [token for token in tokens[start:] if token.startswith("/")]
+    if not paths:
+        fail("cat/tail/grep require at least one absolute log path")
+    for path in paths:
+        if not is_under(path, roots):
+            fail("log path is outside allowed roots", path=path, allowed_roots=roots)
+
+
+def validate_command(command_text: str, log_roots: list[str]) -> list[str]:
+    if any(item in command_text for item in BLOCKED_SUBSTRINGS):
+        fail("remote command contains blocked shell metacharacters")
+    try:
+        tokens = shlex.split(command_text)
+    except ValueError as exc:
+        fail("remote command cannot be parsed", detail=str(exc))
+    if not tokens:
+        fail("remote command is empty")
+    if any(token in BLOCKED_TOKENS for token in tokens):
+        fail("remote command contains a blocked token")
+    if len(tokens) >= 2 and tokens[0] == "systemctl" and tokens[1] in {"restart", "stop", "reload", "start"}:
+        fail("systemctl write operations are blocked")
+
+    program = tokens[0]
+    if program in SIMPLE_ALLOW:
+        return tokens
+    if program == "top":
+        if tokens in (["top", "-b", "-n1"], ["top", "-bn1"], ["top", "-b", "-n", "1"]):
+            return tokens
+        fail("only top -b -n1 is allowed")
+    if program == "journalctl":
+        if any(token in {"-f", "--follow"} or token.startswith("--vacuum") for token in tokens[1:]):
+            fail("journalctl follow/vacuum is blocked")
+        return tokens
+    if program == "tail":
+        if any(token in {"-f", "--follow"} for token in tokens[1:]):
+            fail("tail follow is blocked")
+        validate_log_paths(tokens, log_roots)
+        return tokens
+    if program == "cat":
+        validate_log_paths(tokens, log_roots)
+        return tokens
+    if program == "grep":
+        if any(token in {"-r", "-R", "--recursive"} for token in tokens[1:]):
+            fail("recursive grep is blocked")
+        validate_log_paths(tokens, log_roots, start=2)
+        return tokens
+
+    fail("remote command is not in the read-only allowlist", command=program)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Read-only SSH command wrapper")
+    parser.add_argument("host")
+    parser.add_argument("remote_command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+
+    if not args.remote_command:
+        fail("remote command is required")
+
+    config = tool_config("ssh_ro")
+    host = require_name(args.host, "host")
+    allowed_hosts = config.get("allowed_hosts") or []
+    if allowed_hosts and host not in allowed_hosts:
+        fail("host is not in tools.ssh_ro.allowed_hosts", host=host)
+
+    log_roots = [str(item) for item in (config.get("log_roots") or ["/var/log"])]
+    command_text = " ".join(args.remote_command)
+    tokens = validate_command(command_text, log_roots)
+    remote_command = shlex.join(tokens)
+    ssh = str(config.get("ssh") or "ssh")
+    connect_timeout = str(int(config.get("connect_timeout_seconds", 5)))
+    timeout = default_timeout(config, 20)
+    command = [
+        ssh,
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={connect_timeout}",
+        host,
+        remote_command,
+    ]
+    result = command_result(command, timeout=timeout)
+    emit({"ok": result.get("ok", False), "source": "ssh_ro", "host": host, "remote_command": tokens, "result": result}, 0 if result.get("ok") else 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _common import command_result, default_timeout, emit, fail, parse_duration_seconds, require_name, tool_config
+
+
+def context_arg(config: dict, cluster: str | None) -> list[str]:
+    context = cluster or config.get("default_context")
+    if not context:
+        fail("--cluster is required when tools.k8s.default_context is not configured")
+    context = require_name(str(context), "cluster")
+    allowed = config.get("allowed_contexts") or []
+    if allowed and context not in allowed:
+        fail("cluster is not in tools.k8s.allowed_contexts", cluster=context)
+    return ["--context", context]
+
+
+def namespace_arg(namespace: str) -> list[str]:
+    return ["--namespace", require_name(namespace, "namespace")]
+
+
+def run_kubectl(config: dict, args: list[str]) -> None:
+    kubectl = str(config.get("kubectl") or "kubectl")
+    timeout = default_timeout(config, 30)
+    result = command_result([kubectl, *args], timeout=timeout)
+    emit({"ok": result.get("ok", False), "source": "kubernetes", "result": result}, 0 if result.get("ok") else 1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Read-only Kubernetes client")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    get_pods = subparsers.add_parser("get-pods")
+    get_pods.add_argument("--cluster")
+    get_pods.add_argument("--namespace", required=True)
+
+    get_endpoints = subparsers.add_parser("get-endpoints")
+    get_endpoints.add_argument("--cluster")
+    get_endpoints.add_argument("--namespace", required=True)
+    get_endpoints.add_argument("--service", required=True)
+
+    describe_pod = subparsers.add_parser("describe-pod")
+    describe_pod.add_argument("--cluster")
+    describe_pod.add_argument("--namespace", required=True)
+    describe_pod.add_argument("--pod", required=True)
+
+    logs = subparsers.add_parser("logs")
+    logs.add_argument("--cluster")
+    logs.add_argument("--namespace", required=True)
+    logs.add_argument("--pod", required=True)
+    logs.add_argument("--container")
+    logs.add_argument("--since", default="15m")
+    logs.add_argument("--tail", type=int, default=200)
+
+    top_pods = subparsers.add_parser("top-pods")
+    top_pods.add_argument("--cluster")
+    top_pods.add_argument("--namespace", required=True)
+
+    args = parser.parse_args()
+    config = tool_config("k8s")
+    base = [*context_arg(config, getattr(args, "cluster", None)), *namespace_arg(args.namespace)]
+
+    if args.command == "get-pods":
+        run_kubectl(config, [*base, "get", "pods", "-o", "wide"])
+    elif args.command == "get-endpoints":
+        run_kubectl(config, [*base, "get", "endpoints", require_name(args.service, "service"), "-o", "yaml"])
+    elif args.command == "describe-pod":
+        run_kubectl(config, [*base, "describe", "pod", require_name(args.pod, "pod")])
+    elif args.command == "logs":
+        parse_duration_seconds(args.since)
+        if args.tail < 1 or args.tail > 2000:
+            fail("--tail must be between 1 and 2000")
+        command = [*base, "logs", require_name(args.pod, "pod"), "--since", args.since, "--tail", str(args.tail)]
+        if args.container:
+            command.extend(["--container", require_name(args.container, "container")])
+        run_kubectl(config, command)
+    elif args.command == "top-pods":
+        run_kubectl(config, [*base, "top", "pods"])
+
+
+if __name__ == "__main__":
+    main()
