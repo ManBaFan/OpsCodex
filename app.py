@@ -19,9 +19,12 @@ CONFIG_FILE = BASE / "config" / "harness.yaml"
 
 
 def load_config() -> dict[str, Any]:
-    if not CONFIG_FILE.exists():
+    config_file = pathlib.Path(os.environ.get("OPS_HARNESS_CONFIG", str(CONFIG_FILE)))
+    if not config_file.is_absolute():
+        config_file = BASE / config_file
+    if not config_file.exists():
         return {}
-    with CONFIG_FILE.open("r", encoding="utf-8") as handle:
+    with config_file.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     return data if isinstance(data, dict) else {}
 

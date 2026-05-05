@@ -74,3 +74,37 @@ Codex must use only these clients:
 ```
 
 The tools enforce read-only command construction and reject known dangerous operations. Production write actions are intentionally out of scope for this MVP.
+
+## Lab Validation
+
+The repository includes a lightweight OpenResty 5xx lab that exercises the full webhook -> Codex -> tools -> report path without production access.
+
+Start the lab:
+
+```bash
+./lab/start_lab.sh
+```
+
+Trigger the sample alert:
+
+```bash
+./lab/trigger_alert.sh
+```
+
+The lab provides:
+
+- mock VictoriaMetrics/Prometheus APIs on `127.0.0.1:19090`
+- mock Elasticsearch APIs on `127.0.0.1:19200`
+- mock read-only `kubectl`
+- mock read-only `aws`
+- local OpenResty-style logs under `/opt/opscodex-lab/logs/openresty/error.log`
+
+`config/harness.lab.yaml` intentionally uses Codex `danger-full-access` on the isolated lab host, because the Linux sandbox can block localhost network sockets and SSH sockets used by the mock VM/ES/SSH tools. Keep the production `config/harness.yaml` on `workspace-write` unless you have an external command policy or tool broker.
+
+Expected diagnosis direction: the evidence should support an upstream/release issue for `hbg-fiat-web` v2 and mostly exclude OpenResty node load and network allowance exhaustion.
+
+Stop the lab:
+
+```bash
+./lab/stop_lab.sh
+```

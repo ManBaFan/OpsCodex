@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - covered by deployment dependency check
 
 
 BASE_DIR = pathlib.Path(__file__).resolve().parents[1]
-CONFIG_FILE = BASE_DIR / "config" / "harness.yaml"
+DEFAULT_CONFIG_FILE = BASE_DIR / "config" / "harness.yaml"
 DURATION_RE = re.compile(r"^(?P<value>[1-9][0-9]*)(?P<unit>s|m|h|d)$")
 ENV_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
@@ -47,9 +47,12 @@ def _expand_env(value: Any) -> Any:
 
 
 def load_config() -> dict[str, Any]:
-    if not CONFIG_FILE.exists() or yaml is None:
+    config_path = pathlib.Path(os.environ.get("OPS_HARNESS_CONFIG", str(DEFAULT_CONFIG_FILE)))
+    if not config_path.is_absolute():
+        config_path = BASE_DIR / config_path
+    if not config_path.exists() or yaml is None:
         return {}
-    with CONFIG_FILE.open("r", encoding="utf-8") as handle:
+    with config_path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     if not isinstance(data, dict):
         fail("config/harness.yaml must contain a YAML mapping")

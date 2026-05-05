@@ -1,0 +1,46 @@
+codex:
+  command: codex
+  timeout_seconds: 900
+  sandbox: danger-full-access
+  extra_args:
+    - -c
+    - approval_policy="never"
+
+tools:
+  vm:
+    base_url: http://127.0.0.1:19090
+    timeout_seconds: 10
+    default_step_seconds: 60
+
+  es:
+    base_url: http://127.0.0.1:19200
+    timeout_seconds: 10
+    max_size: 20
+    verify_tls: true
+
+  k8s:
+    kubectl: ${OPSCODEX_LAB_KUBECTL}
+    timeout_seconds: 10
+    default_context: lab
+    allowed_contexts:
+      - lab
+
+  aws:
+    aws: ${OPSCODEX_LAB_AWS}
+    region: ap-northeast-1
+    timeout_seconds: 10
+    period_seconds: 60
+
+  ssh_ro:
+    ssh: ssh
+    timeout_seconds: 10
+    connect_timeout_seconds: 3
+    allowed_hosts:
+      - localhost
+      - 127.0.0.1
+      - kobe
+      - openresty-lab-1
+      - i-lab-openresty-1
+    log_roots:
+      - /var/log
+      - /opt/opscodex-lab/logs

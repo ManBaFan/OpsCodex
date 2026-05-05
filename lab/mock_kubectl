@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import sys
+
+
+def has_sequence(args: list[str], sequence: list[str]) -> bool:
+    for index in range(len(args) - len(sequence) + 1):
+        if args[index : index + len(sequence)] == sequence:
+            return True
+    return False
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if has_sequence(args, ["get", "pods"]):
+        print(
+            "NAME                                  READY   STATUS             RESTARTS   AGE   IP          NODE\n"
+            "hbg-fiat-web-v1-6dbbb9d79f-c7xq8     1/1     Running            0          2d    10.42.8.11  worker-a\n"
+            "hbg-fiat-web-v2-85c9c48b8c-9l27p     0/1     CrashLoopBackOff   5          18m   10.42.8.17  worker-b\n"
+            "hbg-fiat-web-v2-85c9c48b8c-nj6gq     1/1     Running            3          18m   10.42.8.18  worker-c\n"
+        )
+        return
+    if has_sequence(args, ["get", "endpoints"]):
+        print(
+            "apiVersion: v1\n"
+            "kind: Endpoints\n"
+            "metadata:\n"
+            "  name: hbg-fiat-web\n"
+            "subsets:\n"
+            "- addresses:\n"
+            "  - ip: 10.42.8.11\n"
+            "    targetRef:\n"
+            "      name: hbg-fiat-web-v1-6dbbb9d79f-c7xq8\n"
+            "  - ip: 10.42.8.18\n"
+            "    targetRef:\n"
+            "      name: hbg-fiat-web-v2-85c9c48b8c-nj6gq\n"
+            "  notReadyAddresses:\n"
+            "  - ip: 10.42.8.17\n"
+            "    targetRef:\n"
+            "      name: hbg-fiat-web-v2-85c9c48b8c-9l27p\n"
+            "  ports:\n"
+            "  - port: 8080\n"
+        )
+        return
+    if has_sequence(args, ["describe", "pod"]):
+        print(
+            "Name: hbg-fiat-web-v2-85c9c48b8c-9l27p\n"
+            "Namespace: prd8\n"
+            "Containers:\n"
+            "  app:\n"
+            "    State: Waiting\n"
+            "      Reason: CrashLoopBackOff\n"
+            "    Last State: Terminated\n"
+            "      Reason: Error\n"
+            "    Restart Count: 5\n"
+            "Events:\n"
+            "  Warning  Unhealthy  15m  kubelet  Readiness probe failed: HTTP probe failed with statuscode: 500\n"
+            "  Warning  BackOff    12m  kubelet  Back-off restarting failed container app\n"
+        )
+        return
+    if "logs" in args:
+        print(
+            "2026-05-05T04:13:01Z INFO deploy version=v2.8.4 commit=lab-bad started\n"
+            "2026-05-05T04:15:23Z ERROR database pool exhausted route=/api/payment\n"
+            "2026-05-05T04:16:08Z ERROR readiness failed status=500\n"
+        )
+        return
+    if has_sequence(args, ["top", "pods"]):
+        print(
+            "NAME                                  CPU(cores)   MEMORY(bytes)\n"
+            "hbg-fiat-web-v1-6dbbb9d79f-c7xq8     42m          210Mi\n"
+            "hbg-fiat-web-v2-85c9c48b8c-9l27p     38m          190Mi\n"
+            "hbg-fiat-web-v2-85c9c48b8c-nj6gq     45m          205Mi\n"
+        )
+        return
+    print("mock_kubectl: unsupported read-only command", args, file=sys.stderr)
+    raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,36 @@
+{
+  "receiver": "ops-harness-lab",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "OpenResty5xxHigh",
+        "severity": "critical",
+        "cluster": "lab",
+        "namespace": "prd8",
+        "service": "hbg-fiat-web",
+        "upstream": "hbg-fiat-web",
+        "openresty_node": "openresty-lab-1",
+        "instance_id": "i-lab-openresty-1",
+        "target_group": "lab-hbg-fiat-web"
+      },
+      "annotations": {
+        "summary": "OpenResty 5xx rate is above threshold",
+        "description": "5xx started about 15 minutes after hbg-fiat-web v2 rollout. Please diagnose upstream, node load, network, release, and OpenResty runtime."
+      },
+      "startsAt": "2026-05-05T12:15:00+08:00",
+      "generatorURL": "https://grafana.example/lab/openresty-5xx"
+    }
+  ],
+  "commonLabels": {
+    "alertname": "OpenResty5xxHigh",
+    "cluster": "lab",
+    "namespace": "prd8",
+    "service": "hbg-fiat-web"
+  },
+  "commonAnnotations": {
+    "runbook": "OpenResty 5xx automatic diagnosis lab"
+  },
+  "externalURL": "https://alertmanager.example"
+}

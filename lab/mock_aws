@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import sys
+import time
+
+
+def arg_value(args: list[str], name: str, default: str = "") -> str:
+    if name not in args:
+        return default
+    index = args.index(name)
+    if index + 1 >= len(args):
+        return default
+    return args[index + 1]
+
+
+def metric_payload(metric: str) -> dict:
+    now = int(time.time())
+    if metric in {"TargetConnectionErrorCount", "TCP_Target_Reset_Count"}:
+        points = [0, 0, 1, 0, 0]
+    elif metric == "TargetResponseTime":
+        points = [0.12, 0.18, 0.26, 0.22, 0.19]
+    else:
+        points = [1000, 1200, 1100, 1300, 1250]
+    return {
+        "Label": metric,
+        "Datapoints": [
+            {
+                "Timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - (len(points) - index) * 60)),
+                "Average": value,
+                "Maximum": value,
+                "Sum": value,
+                "Unit": "Count",
+            }
+            for index, value in enumerate(points)
+        ],
+    }
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if args[:2] == ["cloudwatch", "get-metric-statistics"]:
+        print(json.dumps(metric_payload(arg_value(args, "--metric-name")), indent=2))
+        return
+    if args[:2] == ["ec2", "describe-instances"]:
+        instance_id = arg_value(args, "--instance-ids", "i-lab-openresty-1")
+        print(
+            json.dumps(
+                {
+                    "Reservations": [
+                        {
+                            "Instances": [
+                                {
+                                    "InstanceId": instance_id,
+                                    "InstanceType": "c6i.large",
+                                    "PrivateIpAddress": "10.42.1.161",
+                                    "State": {"Name": "running"},
+                                    "Tags": [{"Key": "Name", "Value": "openresty-lab-1"}],
+                                }
+                            ]
+                        }
+                    ]
+                },
+                indent=2,
+            )
+        )
+        return
+    if args[:2] == ["elbv2", "describe-target-groups"]:
+        print(
+            json.dumps(
+                {
+                    "TargetGroups": [
+                        {
+                            "TargetGroupName": "lab-hbg-fiat-web",
+                            "TargetGroupArn": "arn:aws:elasticloadbalancing:ap-northeast-1:111122223333:targetgroup/lab-hbg-fiat-web/abcdef",
+                            "LoadBalancerArns": [
+                                "arn:aws:elasticloadbalancing:ap-northeast-1:111122223333:loadbalancer/net/lab-nlb/123456"
+                            ],
+                        }
+                    ]
+                },
+                indent=2,
+            )
+        )
+        return
+    print("mock_aws: unsupported read-only command", args, file=sys.stderr)
+    raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()
